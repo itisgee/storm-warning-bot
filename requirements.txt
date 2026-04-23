@@ -3,3 +3,4 @@ shapely
 requests
 sseclient-py
 gunicorn
+flask-cors
