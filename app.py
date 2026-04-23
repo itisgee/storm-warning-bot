@@ -6,8 +6,6 @@ from shapely.geometry import Point, shape
 app = Flask(__name__)
 CORS(app)
 
-# TEST VEHICLE LOCATION
-# Change these to place the "car" somewhere else.
 VEHICLE_LAT = 35.4676
 VEHICLE_LON = -97.5164
 
@@ -26,68 +24,58 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
         return False
 
     polygon = shape(geometry)
-    vehicle_point = Point(lon, lat)  # shapely uses lon, lat
+    point = Point(lon, lat)
 
-    return polygon.contains(vehicle_point)
+    return polygon.contains(point)
 
 
 @app.route("/status.json")
 def status():
+
+    headers = {
+        "User-Agent":"WeatherHolidays storm bot"
+    }
+
+    params = {
+        "event":"Tornado Warning",
+        "status":"actual",
+        "message_type":"alert"
+    }
+
     try:
-        headers = {
-            "User-Agent": "WeatherHolidays storm warning bot contact: crashlanding@hotmail.co.uk"
-        }
-
-        params = {
-            "event": "Tornado Warning",
-            "status": "actual",
-            "message_type": "alert"
-        }
-
-        response = requests.get(
+        r = requests.get(
             NWS_ALERTS_URL,
             headers=headers,
             params=params,
             timeout=10
         )
 
-        response.raise_for_status()
-        alerts = response.json().get("features", [])
+        alerts = r.json().get("features",[])
 
         for alert in alerts:
-            if vehicle_inside_alert_polygon(alert, VEHICLE_LAT, VEHICLE_LON):
-                props = alert.get("properties", {})
+            if vehicle_inside_alert_polygon(
+                alert,
+                VEHICLE_LAT,
+                VEHICLE_LON
+            ):
                 return jsonify({
-                    "state": "warning",
-                    "text": "TORNADO WARNING ISSUED",
-                    "source": "nws_polygon_test",
-                    "headline": props.get("headline", ""),
-                    "area": props.get("areaDesc", ""),
-                    "expires": props.get("expires", ""),
-                    "vehicle": {
-                        "lat": VEHICLE_LAT,
-                        "lon": VEHICLE_LON
-                    }
+                    "state":"warning",
+                    "text":"TORNADO WARNING ISSUED",
+                    "source":"nws_polygon_test"
                 })
 
         return jsonify({
-            "state": "normal",
-            "text": "",
-            "source": "nws_polygon_test",
-            "vehicle": {
-                "lat": VEHICLE_LAT,
-                "lon": VEHICLE_LON
-            }
+            "state":"normal",
+            "text":"",
+            "source":"nws_polygon_test"
         })
 
     except Exception as e:
         return jsonify({
-            "state": "error",
-            "text": "Warning check failed",
-            "source": "nws_polygon_test",
-            "error": str(e)
-        }), 500
+            "state":"error",
+            "error":str(e)
+        })
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     app.run(debug=True)
