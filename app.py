@@ -26,7 +26,7 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
     polygon = shape(geometry)
     point = Point(lon, lat)
 
-    return polygon.contains(point)
+    return polygon.covers(point)
 
 
 @app.route("/status.json")
@@ -69,6 +69,17 @@ def status():
             "text":"",
             "source":"nws_polygon_test"
         })
+    
+    return jsonify({
+    "state":"normal",
+    "text":"",
+    "source":"nws_polygon_test",
+    "alerts_checked": len(alerts),
+    "vehicle": {
+        "lat": VEHICLE_LAT,
+        "lon": VEHICLE_LON
+    }
+})
 
     except Exception as e:
         return jsonify({
