@@ -10,8 +10,8 @@ def home():
 @app.route("/status.json")
 def status():
     return jsonify({
-        "state":"warning",
-"text":"TORNADO WARNING ISSUED",
+        "state":"normal",
+"text":"",
         "source":"prototype"
     })
 
