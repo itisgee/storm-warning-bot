@@ -1,0 +1,5 @@
+flask
+shapely
+requests
+sseclient-py
+gunicorn
