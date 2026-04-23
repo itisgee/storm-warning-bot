@@ -31,15 +31,14 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
 
 @app.route("/status.json")
 def status():
-
     headers = {
-        "User-Agent":"WeatherHolidays storm bot"
+        "User-Agent": "WeatherHolidays storm bot"
     }
 
     params = {
-        "event":"Tornado Warning",
-        "status":"actual",
-        "message_type":"alert"
+        "event": "Tornado Warning",
+        "status": "actual",
+        "message_type": "alert"
     }
 
     try:
@@ -50,43 +49,41 @@ def status():
             timeout=10
         )
 
-        alerts = r.json().get("features",[])
+        r.raise_for_status()
+        alerts = r.json().get("features", [])
 
         for alert in alerts:
-    if vehicle_inside_alert_polygon(
-        alert,
-        VEHICLE_LAT,
-        VEHICLE_LON
-    ):
-        return jsonify({
-            "state": "warning",
-            "text": "TORNADO WARNING ISSUED",
-            "source": "nws_polygon_test"
-        })
+            if vehicle_inside_alert_polygon(alert, VEHICLE_LAT, VEHICLE_LON):
+                return jsonify({
+                    "state": "warning",
+                    "text": "TORNADO WARNING ISSUED",
+                    "source": "nws_polygon_test",
+                    "alerts_checked": len(alerts),
+                    "vehicle": {
+                        "lat": VEHICLE_LAT,
+                        "lon": VEHICLE_LON
+                    }
+                })
 
         return jsonify({
-            "state":"normal",
-            "text":"",
-            "source":"nws_polygon_test"
+            "state": "normal",
+            "text": "",
+            "source": "nws_polygon_test",
+            "alerts_checked": len(alerts),
+            "vehicle": {
+                "lat": VEHICLE_LAT,
+                "lon": VEHICLE_LON
+            }
         })
-    
-    return jsonify({
-    "state":"normal",
-    "text":"",
-    "source":"nws_polygon_test",
-    "alerts_checked": len(alerts),
-    "vehicle": {
-        "lat": VEHICLE_LAT,
-        "lon": VEHICLE_LON
-    }
-})
 
     except Exception as e:
         return jsonify({
-            "state":"error",
-            "error":str(e)
-        })
+            "state": "error",
+            "text": "Warning check failed",
+            "source": "nws_polygon_test",
+            "error": str(e)
+        }), 500
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     app.run(debug=True)
