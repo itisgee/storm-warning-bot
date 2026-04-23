@@ -6,8 +6,8 @@ from shapely.geometry import Point, shape
 app = Flask(__name__)
 CORS(app)
 
-VEHICLE_LAT = 35.4676
-VEHICLE_LON = -97.5164
+VEHICLE_LAT = -95.43
+VEHICLE_LON = 40.65
 
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 
@@ -53,16 +53,16 @@ def status():
         alerts = r.json().get("features",[])
 
         for alert in alerts:
-            if vehicle_inside_alert_polygon(
-                alert,
-                VEHICLE_LAT = -95.43
-                VEHICLE_LON = 40.65
-            ):
-                return jsonify({
-                    "state":"warning",
-                    "text":"TORNADO WARNING ISSUED",
-                    "source":"nws_polygon_test"
-                })
+    if vehicle_inside_alert_polygon(
+        alert,
+        VEHICLE_LAT,
+        VEHICLE_LON
+    ):
+        return jsonify({
+            "state": "warning",
+            "text": "TORNADO WARNING ISSUED",
+            "source": "nws_polygon_test"
+        })
 
         return jsonify({
             "state":"normal",
