@@ -6,8 +6,8 @@ from shapely.geometry import Point, shape
 app = Flask(__name__)
 CORS(app)
 
-VEHICLE_LAT = -95.43
-VEHICLE_LON = 40.65
+VEHICLE_LAT = 40.65
+VEHICLE_LON = -95.43
 
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 
