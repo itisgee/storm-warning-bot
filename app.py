@@ -55,8 +55,8 @@ def status():
         for alert in alerts:
             if vehicle_inside_alert_polygon(
                 alert,
-                VEHICLE_LAT,
-                VEHICLE_LON
+                VEHICLE_LAT = -95.43
+                VEHICLE_LON = 40.65
             ):
                 return jsonify({
                     "state":"warning",
