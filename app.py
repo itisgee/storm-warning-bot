@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 app = Flask(__name__)
 CORS(app)
 
-# Starting/default vehicle location
 VEHICLE_LAT = 40.73
 VEHICLE_LON = -94.93
 
@@ -34,58 +33,32 @@ def tracker():
 <title>WeatherHolidays GPS Tracker</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-body{
-font-family:Arial,sans-serif;
-background:#111;
-color:#fff;
-padding:20px;
-}
-button{
-font-size:20px;
-padding:12px 18px;
-border:none;
-border-radius:10px;
-background:#0a84ff;
-color:white;
-font-weight:bold;
-}
-.data{
-font-size:18px;
-line-height:1.6;
-}
+body{font-family:Arial,sans-serif;background:#111;color:#fff;padding:20px;}
+button{font-size:20px;padding:12px 18px;border:none;border-radius:10px;background:#0a84ff;color:white;font-weight:bold;}
+.data{font-size:18px;line-height:1.6;}
 </style>
 </head>
 <body>
-
 <h2>WeatherHolidays GPS Tracker</h2>
-
 <button onclick="startTracking()">Start GPS Tracking</button>
-
 <div class="data">
 <p>Status: <span id="status">Waiting</span></p>
 <p>Latitude: <span id="lat">-</span></p>
 <p>Longitude: <span id="lon">-</span></p>
 <p>Last sent: <span id="sent">-</span></p>
 </div>
-
 <script>
 function startTracking(){
   if(!navigator.geolocation){
     document.getElementById("status").innerText = "GPS not supported";
     return;
   }
-
   document.getElementById("status").innerText = "Requesting GPS...";
-
-  navigator.geolocation.watchPosition(
-    sendPosition,
-    showError,
-    {
-      enableHighAccuracy:true,
-      maximumAge:0,
-      timeout:10000
-    }
-  );
+  navigator.geolocation.watchPosition(sendPosition, showError, {
+    enableHighAccuracy:true,
+    maximumAge:0,
+    timeout:10000
+  });
 }
 
 async function sendPosition(position){
@@ -99,15 +72,9 @@ async function sendPosition(position){
   try{
     await fetch("/location/update", {
       method:"POST",
-      headers:{
-        "Content-Type":"application/json"
-      },
-      body:JSON.stringify({
-        lat:lat,
-        lon:lon
-      })
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({lat:lat, lon:lon})
     });
-
     document.getElementById("sent").innerText = new Date().toLocaleTimeString();
   }catch(e){
     document.getElementById("status").innerText = "Send failed";
@@ -118,7 +85,6 @@ function showError(error){
   document.getElementById("status").innerText = "GPS error: " + error.message;
 }
 </script>
-
 </body>
 </html>
 """
@@ -153,6 +119,24 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
     point = Point(lon, lat)
 
     return polygon.covers(point)
+
+
+def classify_tornado_alert(alert):
+    props = alert.get("properties", {})
+
+    headline = props.get("headline", "") or ""
+    description = props.get("description", "") or ""
+    instruction = props.get("instruction", "") or ""
+
+    combined_text = f"{headline} {description} {instruction}".upper()
+
+    if "TORNADO EMERGENCY" in combined_text:
+        return "tornado_emergency", "TORNADO EMERGENCY"
+
+    if "PARTICULARLY DANGEROUS SITUATION" in combined_text or "PDS" in combined_text:
+        return "pds_tornado", "PDS TORNADO WARNING"
+
+    return "tornado", "TORNADO WARNING ISSUED"
 
 
 @app.route("/status.json")
@@ -194,9 +178,11 @@ def status():
                 if vehicle_inside_alert_polygon(alert, lat, lon):
 
                     if warning_type == "Tornado Warning":
+                        state, text = classify_tornado_alert(alert)
+
                         return jsonify({
-                            "state": "tornado",
-                            "text": "TORNADO WARNING ISSUED",
+                            "state": state,
+                            "text": text,
                             "source": "live_gps_nws_polygon",
                             "alerts_checked": total_alerts_checked,
                             "vehicle": vehicle_location
