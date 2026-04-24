@@ -161,41 +161,61 @@ def status():
         "User-Agent": "WeatherHolidays storm bot"
     }
 
-    params = {
-        "event": "Tornado Warning",
-        "status": "actual",
-        "message_type": "alert"
-    }
+    warning_priority = [
+        "Tornado Warning",
+        "Severe Thunderstorm Warning"
+    ]
+
+    lat = vehicle_location["lat"]
+    lon = vehicle_location["lon"]
+
+    total_alerts_checked = 0
 
     try:
-        r = requests.get(
-            NWS_ALERTS_URL,
-            headers=headers,
-            params=params,
-            timeout=10
-        )
+        for warning_type in warning_priority:
+            params = {
+                "event": warning_type,
+                "status": "actual",
+                "message_type": "alert"
+            }
 
-        r.raise_for_status()
-        alerts = r.json().get("features", [])
+            r = requests.get(
+                NWS_ALERTS_URL,
+                headers=headers,
+                params=params,
+                timeout=10
+            )
 
-        lat = vehicle_location["lat"]
-        lon = vehicle_location["lon"]
+            r.raise_for_status()
+            alerts = r.json().get("features", [])
+            total_alerts_checked += len(alerts)
 
-        for alert in alerts:
-            if vehicle_inside_alert_polygon(alert, lat, lon):
-                return jsonify({
-                    "state": "warning",
-                    "text": "TORNADO WARNING ISSUED",
-                    "source": "live_gps_nws_polygon",
-                    "alerts_checked": len(alerts),
-                    "vehicle": vehicle_location
-                })
+            for alert in alerts:
+                if vehicle_inside_alert_polygon(alert, lat, lon):
+
+                    if warning_type == "Tornado Warning":
+                        return jsonify({
+                            "state": "tornado",
+                            "text": "TORNADO WARNING ISSUED",
+                            "source": "live_gps_nws_polygon",
+                            "alerts_checked": total_alerts_checked,
+                            "vehicle": vehicle_location
+                        })
+
+                    if warning_type == "Severe Thunderstorm Warning":
+                        return jsonify({
+                            "state": "severe",
+                            "text": "SEVERE THUNDERSTORM WARNING",
+                            "source": "live_gps_nws_polygon",
+                            "alerts_checked": total_alerts_checked,
+                            "vehicle": vehicle_location
+                        })
 
         return jsonify({
             "state": "normal",
             "text": "",
             "source": "live_gps_nws_polygon",
-            "alerts_checked": len(alerts),
+            "alerts_checked": total_alerts_checked,
             "vehicle": vehicle_location
         })
 
