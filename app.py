@@ -2,6 +2,8 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from shapely.geometry import Point, shape
+from shapely.ops import transform
+from pyproj import Transformer
 from datetime import datetime, timezone
 
 app = Flask(__name__)
@@ -120,6 +122,28 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
 
     return polygon.covers(point)
 
+def vehicle_distance_to_polygon_miles(alert, lat, lon):
+    geometry = alert.get("geometry")
+
+    if not geometry:
+        return None
+
+    polygon = shape(geometry)
+    point = Point(lon, lat)
+
+    transformer = Transformer.from_crs(
+        "EPSG:4326",
+        "EPSG:3857",
+        always_xy=True
+    )
+
+    polygon_m = transform(transformer.transform, polygon)
+    point_m = transform(transformer.transform, point)
+
+    distance_meters = polygon_m.distance(point_m)
+    distance_miles = distance_meters / 1609.344
+
+    return distance_miles
 
 def classify_tornado_alert(alert):
     props = alert.get("properties", {})
@@ -175,7 +199,13 @@ def status():
             total_alerts_checked += len(alerts)
 
             for alert in alerts:
-                if vehicle_inside_alert_polygon(alert, lat, lon):
+                distance_miles = vehicle_distance_to_polygon_miles(
+                    alert,
+                    lat,
+                    lon
+                )
+
+                if distance_miles is not None and distance_miles <= 3:
 
                     if warning_type == "Tornado Warning":
                         state, text = classify_tornado_alert(alert)
@@ -185,7 +215,9 @@ def status():
                             "text": text,
                             "source": "live_gps_nws_polygon",
                             "alerts_checked": total_alerts_checked,
+                            "distance_miles": round(distance_miles,2),
                             "vehicle": vehicle_location
+                            
                         })
 
                     if warning_type == "Severe Thunderstorm Warning":
