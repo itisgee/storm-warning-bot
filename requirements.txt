@@ -4,3 +4,4 @@ requests
 sseclient-py
 gunicorn
 flask-cors
+pyproj
