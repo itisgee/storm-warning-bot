@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 app = Flask(__name__)
 CORS(app)
 
-VEHICLE_LAT = 40.73
-VEHICLE_LON = -94.93
+VEHICLE_LAT = 34.56
+VEHICLE_LON = -97.16
 
 vehicle_location = {
     "lat": VEHICLE_LAT,
