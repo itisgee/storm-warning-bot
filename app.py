@@ -199,13 +199,21 @@ def status():
             total_alerts_checked += len(alerts)
 
             for alert in alerts:
-                distance_miles = vehicle_distance_to_polygon_miles(
-                    alert,
-                    lat,
-                    lon
-                )
+                inside_polygon = vehicle_inside_alert_polygon(
+    alert,
+    lat,
+    lon
+)
 
-                if distance_miles is not None and distance_miles <= 3:
+distance_miles = vehicle_distance_to_polygon_miles(
+    alert,
+    lat,
+    lon
+)
+
+if inside_polygon or (
+    distance_miles is not None and distance_miles <= 3
+):
 
                     if warning_type == "Tornado Warning":
                         state, text = classify_tornado_alert(alert)
