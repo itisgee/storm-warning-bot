@@ -49,13 +49,16 @@ button{font-size:20px;padding:12px 18px;border:none;border-radius:10px;backgroun
 <p>Longitude: <span id="lon">-</span></p>
 <p>Last sent: <span id="sent">-</span></p>
 </div>
+
 <script>
 function startTracking(){
   if(!navigator.geolocation){
     document.getElementById("status").innerText = "GPS not supported";
     return;
   }
+
   document.getElementById("status").innerText = "Requesting GPS...";
+
   navigator.geolocation.watchPosition(sendPosition, showError, {
     enableHighAccuracy:true,
     maximumAge:0,
@@ -77,6 +80,7 @@ async function sendPosition(position){
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({lat:lat, lon:lon})
     });
+
     document.getElementById("sent").innerText = new Date().toLocaleTimeString();
   }catch(e){
     document.getElementById("status").innerText = "Send failed";
@@ -122,6 +126,7 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
 
     return polygon.covers(point)
 
+
 def vehicle_distance_to_polygon_miles(alert, lat, lon):
     geometry = alert.get("geometry")
 
@@ -144,6 +149,7 @@ def vehicle_distance_to_polygon_miles(alert, lat, lon):
     distance_miles = distance_meters / 1609.344
 
     return distance_miles
+
 
 def classify_tornado_alert(alert):
     props = alert.get("properties", {})
@@ -200,20 +206,20 @@ def status():
 
             for alert in alerts:
                 inside_polygon = vehicle_inside_alert_polygon(
-    alert,
-    lat,
-    lon
-)
+                    alert,
+                    lat,
+                    lon
+                )
 
-distance_miles = vehicle_distance_to_polygon_miles(
-    alert,
-    lat,
-    lon
-)
+                distance_miles = vehicle_distance_to_polygon_miles(
+                    alert,
+                    lat,
+                    lon
+                )
 
-if inside_polygon or (
-    distance_miles is not None and distance_miles <= 3
-):
+                if inside_polygon or (
+                    distance_miles is not None and distance_miles <= 3
+                ):
 
                     if warning_type == "Tornado Warning":
                         state, text = classify_tornado_alert(alert)
@@ -223,9 +229,9 @@ if inside_polygon or (
                             "text": text,
                             "source": "live_gps_nws_polygon",
                             "alerts_checked": total_alerts_checked,
-                            "distance_miles": round(distance_miles,2),
+                            "distance_miles": round(distance_miles, 2),
+                            "inside_polygon": inside_polygon,
                             "vehicle": vehicle_location
-                            
                         })
 
                     if warning_type == "Severe Thunderstorm Warning":
@@ -234,6 +240,8 @@ if inside_polygon or (
                             "text": "SEVERE THUNDERSTORM WARNING",
                             "source": "live_gps_nws_polygon",
                             "alerts_checked": total_alerts_checked,
+                            "distance_miles": round(distance_miles, 2),
+                            "inside_polygon": inside_polygon,
                             "vehicle": vehicle_location
                         })
 
