@@ -94,3 +94,58 @@ def vehicle_distance_to_polygon_miles(alert, lat, lon):
 
 
 def classify_tornado_alert(alert):
+    props = alert.get("properties", {})
+    combined_text = " ".join(str(props.get(k) or "") for k in
+                             ("headline", "description", "instruction")).upper()
+    if "TORNADO EMERGENCY" in combined_text:
+        return "tornado_emergency", "TORNADO EMERGENCY"
+    if "PARTICULARLY DANGEROUS SITUATION" in combined_text or "PDS" in combined_text:
+        return "pds_tornado", "PDS TORNADO WARNING"
+    return "tornado", "TORNADO WARNING ISSUED"
+
+
+@app.route("/status.json")
+def status():
+    gps = public_gps()
+    if gps["gps_status"] != "connected":
+        # Do not call NWS using an outdated or unknown position.
+        return jsonify({"state": "gps_unavailable", "text": "GPS POSITION UNAVAILABLE",
+                        "source": "live_gps_nws_polygon", "alerts_checked": 0, **gps})
+
+    lat, lon = vehicle_location["lat"], vehicle_location["lon"]
+    total_alerts_checked = 0
+    try:
+        for warning_type in ("Tornado Warning", "Severe Thunderstorm Warning"):
+            response = requests.get(
+                NWS_ALERTS_URL,
+                headers={"User-Agent": "WeatherHolidays storm bot"},
+                params={"event": warning_type, "status": "actual", "message_type": "alert"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            alerts = response.json().get("features", [])
+            total_alerts_checked += len(alerts)
+            for alert in alerts:
+                inside = vehicle_inside_alert_polygon(alert, lat, lon)
+                distance = vehicle_distance_to_polygon_miles(alert, lat, lon)
+                if inside or (distance is not None and distance <= 3):
+                    if warning_type == "Tornado Warning":
+                        state, message = classify_tornado_alert(alert)
+                    else:
+                        state, message = "severe", "SEVERE THUNDERSTORM WARNING"
+                    return jsonify({"state": state, "text": message,
+                                    "source": "live_gps_nws_polygon",
+                                    "alerts_checked": total_alerts_checked,
+                                    "distance_miles": round(distance, 2) if distance is not None else None,
+                                    "inside_polygon": inside, **gps})
+        return jsonify({"state": "normal", "text": "",
+                        "source": "live_gps_nws_polygon",
+                        "alerts_checked": total_alerts_checked, **gps})
+    except Exception:
+        app.logger.exception("Warning check failed")
+        return jsonify({"state": "error", "text": "Warning check failed",
+                        "source": "live_gps_nws_polygon", **gps}), 503
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
