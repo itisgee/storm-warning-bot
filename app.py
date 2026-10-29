@@ -1,14 +1,23 @@
+
+import os
+import hmac
+import math
+
+from datetime import datetime, timezone
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+
 import requests
 from shapely.geometry import Point, shape
 from shapely.ops import transform
 from pyproj import Transformer
-from datetime import datetime, timezone
+
 
 app = Flask(__name__)
 CORS(app)
 
+# Default location used until GPS updates arrive.
 VEHICLE_LAT = 40.73
 VEHICLE_LON = -94.93
 
@@ -26,6 +35,10 @@ def home():
     return "Storm warning bot is running"
 
 
+# --------------------------------------------------
+# Existing browser-based GPS tracker
+# --------------------------------------------------
+
 @app.route("/tracker")
 def tracker():
     return """
@@ -35,74 +48,88 @@ def tracker():
 <title>WeatherHolidays GPS Tracker</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-body{font-family:Arial,sans-serif;background:#111;color:#fff;padding:20px;}
-button{font-size:20px;padding:12px 18px;border:none;border-radius:10px;background:#0a84ff;color:white;font-weight:bold;}
-.data{font-size:18px;line-height:1.6;}
+body {
+    font-family: Arial, sans-serif;
+    background: #111;
+    color: #fff;
+    padding: 20px;
+}
+button {
+    font-size: 20px;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 10px;
+    background: #0a84ff;
+    color: white;
+    font-weight: bold;
+}
+.data {
+    font-size: 18px;
+    line-height: 1.6;
+}
 </style>
 </head>
 <body>
 <h2>WeatherHolidays GPS Tracker</h2>
-<button onclick="startTracking()">Start GPS Tracking</button>
+<p>
+    Browser GPS tracking has been retired.
+    The system now uses the vehicle's USB GPS
+    receiver through GPSGate.
+</p>
 <div class="data">
-<p>Status: <span id="status">Waiting</span></p>
-<p>Latitude: <span id="lat">-</span></p>
-<p>Longitude: <span id="lon">-</span></p>
-<p>Last sent: <span id="sent">-</span></p>
+<p>Status: GPSGate tracking mode</p>
 </div>
-
-<script>
-function startTracking(){
-  if(!navigator.geolocation){
-    document.getElementById("status").innerText = "GPS not supported";
-    return;
-  }
-
-  document.getElementById("status").innerText = "Requesting GPS...";
-
-  navigator.geolocation.watchPosition(sendPosition, showError, {
-    enableHighAccuracy:true,
-    maximumAge:0,
-    timeout:10000
-  });
-}
-
-async function sendPosition(position){
-  const lat = position.coords.latitude;
-  const lon = position.coords.longitude;
-
-  document.getElementById("lat").innerText = lat.toFixed(6);
-  document.getElementById("lon").innerText = lon.toFixed(6);
-  document.getElementById("status").innerText = "Tracking";
-
-  try{
-    await fetch("/location/update", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({lat:lat, lon:lon})
-    });
-
-    document.getElementById("sent").innerText = new Date().toLocaleTimeString();
-  }catch(e){
-    document.getElementById("status").innerText = "Send failed";
-  }
-}
-
-function showError(error){
-  document.getElementById("status").innerText = "GPS error: " + error.message;
-}
-</script>
 </body>
 </html>
 """
 
 
+# --------------------------------------------------
+# Secure GPS location updates
+# --------------------------------------------------
+
 @app.route("/location/update", methods=["POST"])
 def location_update():
-    data = request.get_json()
 
-    vehicle_location["lat"] = float(data["lat"])
-    vehicle_location["lon"] = float(data["lon"])
-    vehicle_location["updated"] = datetime.now(timezone.utc).isoformat()
+    expected_token = os.environ.get("GPS_API_TOKEN")
+    supplied_token = request.headers.get("X-GPS-Token", "")
+
+    if not expected_token or not hmac.compare_digest(
+        supplied_token, expected_token
+    ):
+        return jsonify({
+            "error": "Unauthorized"
+        }), 401
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "Invalid JSON"
+        }), 400
+
+    try:
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+
+        if not (
+            math.isfinite(lat)
+            and math.isfinite(lon)
+            and -90 <= lat <= 90
+            and -180 <= lon <= 180
+        ):
+            raise ValueError("Invalid coordinates")
+
+    except (KeyError, TypeError, ValueError):
+        return jsonify({
+            "error": "Invalid coordinates"
+        }), 400
+
+    vehicle_location["lat"] = lat
+    vehicle_location["lon"] = lon
+    vehicle_location["updated"] = (
+        datetime.now(timezone.utc).isoformat()
+    )
 
     return jsonify({
         "ok": True,
@@ -115,7 +142,12 @@ def location_json():
     return jsonify(vehicle_location)
 
 
+# --------------------------------------------------
+# NWS warning polygon detection
+# --------------------------------------------------
+
 def vehicle_inside_alert_polygon(alert, lat, lon):
+
     geometry = alert.get("geometry")
 
     if not geometry:
@@ -128,6 +160,7 @@ def vehicle_inside_alert_polygon(alert, lat, lon):
 
 
 def vehicle_distance_to_polygon_miles(alert, lat, lon):
+
     geometry = alert.get("geometry")
 
     if not geometry:
@@ -142,8 +175,15 @@ def vehicle_distance_to_polygon_miles(alert, lat, lon):
         always_xy=True
     )
 
-    polygon_m = transform(transformer.transform, polygon)
-    point_m = transform(transformer.transform, point)
+    polygon_m = transform(
+        transformer.transform,
+        polygon
+    )
+
+    point_m = transform(
+        transformer.transform,
+        point
+    )
 
     distance_meters = polygon_m.distance(point_m)
     distance_miles = distance_meters / 1609.344
@@ -152,25 +192,46 @@ def vehicle_distance_to_polygon_miles(alert, lat, lon):
 
 
 def classify_tornado_alert(alert):
+
     props = alert.get("properties", {})
 
     headline = props.get("headline", "") or ""
     description = props.get("description", "") or ""
     instruction = props.get("instruction", "") or ""
 
-    combined_text = f"{headline} {description} {instruction}".upper()
+    combined_text = (
+        f"{headline} {description} {instruction}"
+    ).upper()
 
     if "TORNADO EMERGENCY" in combined_text:
-        return "tornado_emergency", "TORNADO EMERGENCY"
+        return (
+            "tornado_emergency",
+            "TORNADO EMERGENCY"
+        )
 
-    if "PARTICULARLY DANGEROUS SITUATION" in combined_text or "PDS" in combined_text:
-        return "pds_tornado", "PDS TORNADO WARNING"
+    if (
+        "PARTICULARLY DANGEROUS SITUATION"
+        in combined_text
+        or "PDS" in combined_text
+    ):
+        return (
+            "pds_tornado",
+            "PDS TORNADO WARNING"
+        )
 
-    return "tornado", "TORNADO WARNING ISSUED"
+    return (
+        "tornado",
+        "TORNADO WARNING ISSUED"
+    )
 
+
+# --------------------------------------------------
+# Warning status endpoint for Larix overlay
+# --------------------------------------------------
 
 @app.route("/status.json")
 def status():
+
     headers = {
         "User-Agent": "WeatherHolidays storm bot"
     }
@@ -186,61 +247,83 @@ def status():
     total_alerts_checked = 0
 
     try:
+
         for warning_type in warning_priority:
+
             params = {
                 "event": warning_type,
                 "status": "actual",
                 "message_type": "alert"
             }
 
-            r = requests.get(
+            response = requests.get(
                 NWS_ALERTS_URL,
                 headers=headers,
                 params=params,
                 timeout=10
             )
 
-            r.raise_for_status()
-            alerts = r.json().get("features", [])
+            response.raise_for_status()
+
+            alerts = response.json().get(
+                "features", []
+            )
+
             total_alerts_checked += len(alerts)
 
             for alert in alerts:
-                inside_polygon = vehicle_inside_alert_polygon(
-                    alert,
-                    lat,
-                    lon
+
+                inside_polygon = (
+                    vehicle_inside_alert_polygon(
+                        alert, lat, lon
+                    )
                 )
 
-                distance_miles = vehicle_distance_to_polygon_miles(
-                    alert,
-                    lat,
-                    lon
+                distance_miles = (
+                    vehicle_distance_to_polygon_miles(
+                        alert, lat, lon
+                    )
                 )
 
-                if inside_polygon or (
-                    distance_miles is not None and distance_miles <= 3
+                if (
+                    inside_polygon
+                    or (
+                        distance_miles is not None
+                        and distance_miles <= 3
+                    )
                 ):
 
                     if warning_type == "Tornado Warning":
-                        state, text = classify_tornado_alert(alert)
+
+                        state, text = (
+                            classify_tornado_alert(alert)
+                        )
 
                         return jsonify({
                             "state": state,
                             "text": text,
                             "source": "live_gps_nws_polygon",
                             "alerts_checked": total_alerts_checked,
-                            "distance_miles": round(distance_miles, 2),
+                            "distance_miles": round(
+                                distance_miles, 2
+                            ),
                             "inside_polygon": inside_polygon,
                             "vehicle": vehicle_location
                         })
 
-                    if warning_type == "Severe Thunderstorm Warning":
+                    if (
+                        warning_type
+                        == "Severe Thunderstorm Warning"
+                    ):
+
                         return jsonify({
                             "state": "severe",
                             "text": "SEVERE THUNDERSTORM WARNING",
                             "source": "live_gps_nws_polygon",
                             "alerts_checked": total_alerts_checked,
-                            "distance_miles": round(distance_miles, 2),
+                            "distance_miles": round(
+                                distance_miles, 2
+                            ),
                             "inside_polygon": inside_polygon,
                             "vehicle": vehicle_location
                         })
@@ -253,12 +336,13 @@ def status():
             "vehicle": vehicle_location
         })
 
-    except Exception as e:
+    except Exception as error:
+
         return jsonify({
             "state": "error",
             "text": "Warning check failed",
             "source": "live_gps_nws_polygon",
-            "error": str(e),
+            "error": str(error),
             "vehicle": vehicle_location
         }), 500
 
