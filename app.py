@@ -17,6 +17,43 @@ CORS(app)
 vehicle_location = {"lat": None, "lon": None, "updated": None}
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 
+# Stage 4: Isolated warning simulation
+TEST_WARNINGS = {
+    "normal": ("normal", ""),
+    "severe": ("severe", "SEVERE THUNDERSTORM WARNING"),
+    "tornado": ("tornado", "TORNADO WARNING ISSUED"),
+    "pds_tornado": ("pds_tornado", "PDS TORNADO WARNING"),
+    "tornado_emergency": ("tornado_emergency", "TORNADO EMERGENCY"),
+}
+
+
+@app.route("/test/status.json", methods=["GET"])
+def test_status():
+    expected_token = os.environ.get("GPS_API_TOKEN")
+    supplied_token = request.headers.get("X-GPS-Token", "")
+
+    if not expected_token or not hmac.compare_digest(
+        supplied_token, expected_token
+    ):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    selected = request.args.get("state", "normal")
+
+    if selected not in TEST_WARNINGS:
+        return jsonify({"error": "Unknown test state"}), 400
+
+    state, message = TEST_WARNINGS[selected]
+
+    return jsonify({
+        "state": state,
+        "text": message,
+        "source": "simulation",
+        "simulation": True,
+        "alerts_checked": 0,
+        **public_gps()
+    })
+
+
 
 def gps_status():
     timestamp = vehicle_location["updated"]
