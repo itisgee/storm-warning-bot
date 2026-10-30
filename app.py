@@ -1,7 +1,7 @@
 import os
 import hmac
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
@@ -111,6 +111,75 @@ def location_update():
 def location_json():
     # Public route intentionally does not expose precise coordinates.
     return jsonify(public_gps())
+
+
+# ---------------------------------------------------------------------------
+# Team position relay (team laptop -> backend -> home GRLevel3 bridge)
+#   POST /ingest              team laptop sends fixes here  (GPS_WRITE_TOKEN)
+#   GET  /position/<source>   home bridge reads from here   (GPS_READ_TOKEN)
+# Kept separate from vehicle_location above, so it never affects the overlay.
+# ---------------------------------------------------------------------------
+team_positions = {}  # source id -> latest fix
+
+
+def bearer_token_ok(env_name):
+    expected = os.environ.get(env_name)
+    supplied = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
+@app.route("/ingest", methods=["POST"])
+def team_ingest():
+    if not bearer_token_ok("GPS_WRITE_TOKEN"):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON"}), 400
+    try:
+        lat, lon = float(data["lat"]), float(data["lon"])
+        fix_time = datetime.fromisoformat(data["fix_time"])
+        if not (math.isfinite(lat) and math.isfinite(lon) and
+                -90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError("Invalid coordinates")
+        if fix_time.tzinfo is None:
+            raise ValueError("fix_time needs a timezone")
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Invalid data"}), 400
+
+    if fix_time > datetime.now(timezone.utc) + timedelta(seconds=60):
+        return jsonify({"error": "fix_time is in the future"}), 400
+
+    source = str(data.get("source", "default"))[:40]
+    previous = team_positions.get(source)
+    if previous and fix_time <= previous["fix_time"]:
+        return jsonify({"ok": True, "ignored": "older than current fix"})
+
+    team_positions[source] = {
+        "lat": lat,
+        "lon": lon,
+        "fix_time": fix_time,
+        "speed_kn": data.get("speed_kn"),
+        "course": data.get("course"),
+        "hdop": data.get("hdop"),
+        "sats": data.get("sats"),
+        "alt_m": data.get("alt_m"),
+    }
+    return jsonify({"ok": True})
+
+
+@app.route("/position/<source>", methods=["GET"])
+def team_position(source):
+    if not bearer_token_ok("GPS_READ_TOKEN"):
+        return jsonify({"error": "Unauthorized"}), 401
+    p = team_positions.get(source)
+    if not p:
+        resp = jsonify({"available": False})
+    else:
+        age = (datetime.now(timezone.utc) - p["fix_time"]).total_seconds()
+        resp = jsonify({"available": True, "age_seconds": round(age, 1),
+                        **p, "fix_time": p["fix_time"].isoformat()})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 def vehicle_inside_alert_polygon(alert, lat, lon):
