@@ -1,5 +1,7 @@
 import os
 import re
+import csv
+import bisect
 import hmac
 import math
 import time
@@ -17,7 +19,8 @@ CORS(app)
 
 # This stage retains the existing in-memory storage. It is not yet
 # suitable for multiple Gunicorn workers or service restarts.
-vehicle_location = {"lat": None, "lon": None, "updated": None}
+vehicle_location = {"lat": None, "lon": None, "updated": None,
+                    "heading_deg": None, "moving": False}
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 
 # Stage 4: Isolated warning simulation
@@ -91,9 +94,107 @@ def gps_status():
 
 
 def public_gps():
+    """GPS health plus town-level location only. Never the exact coordinates."""
     state, age = gps_status()
+    lat, lon = vehicle_location["lat"], vehicle_location["lon"]
+    hdg = vehicle_location.get("heading_deg")
     return {"gps_status": state, "gps_age_seconds": age,
-            "gps_last_updated": vehicle_location["updated"]}
+            "gps_last_updated": vehicle_location["updated"],
+            "place": nearest_place(lat, lon) if lat is not None else None,
+            "heading": None if hdg is None else compass_from_degrees(hdg),
+            "heading_deg": None if hdg is None else round(hdg),
+            "moving": bool(vehicle_location.get("moving"))}
+
+
+# ---------------------------------------------------------------------------
+# Town names and heading for the overlay
+# us_places.csv: US places of 1,000+ people (GeoNames, CC BY 4.0)
+# ---------------------------------------------------------------------------
+_PLACES = []        # (lat, lon, "Town, ST") sorted by latitude
+_PLACE_LATS = []
+_place_cache = {}
+COMPASS_8 = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+def _load_places():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "us_places.csv")
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = [(float(r["lat"]), float(r["lon"]), f"{r['name']}, {r['state']}")
+                    for r in csv.DictReader(f)]
+    except OSError:
+        app.logger.warning("us_places.csv not found, town names disabled")
+        return
+    rows.sort()
+    _PLACES.extend(rows)
+    _PLACE_LATS.extend(r[0] for r in rows)
+
+
+def _miles(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 3958.8 * 2 * math.asin(math.sqrt(a))
+
+
+def nearest_place(lat, lon):
+    """'Yankton, SD' for the nearest town within 60 miles, else None."""
+    if not _PLACES:
+        return None
+    key = (round(lat, 2), round(lon, 2))
+    if key in _place_cache:
+        return _place_cache[key]
+    best, best_d = None, 60.0
+    lo = bisect.bisect_left(_PLACE_LATS, lat - 1.0)
+    hi = bisect.bisect_right(_PLACE_LATS, lat + 1.0)
+    for plat, plon, name in _PLACES[lo:hi]:
+        if abs(plon - lon) > 1.4:
+            continue
+        d = _miles(lat, lon, plat, plon)
+        if d < best_d:
+            best, best_d = name, d
+    if len(_place_cache) > 5000:
+        _place_cache.clear()
+    _place_cache[key] = best
+    return best
+
+
+def compass_from_degrees(deg):
+    return COMPASS_8[int(((deg % 360) + 22.5) // 45) % 8]
+
+
+def bearing_deg(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def set_vehicle_position(lat, lon, updated, course=None, speed_kn=None):
+    """Store the overlay vehicle's position and work out which way it's heading.
+    Uses the GPS course when moving; otherwise compares with the last position.
+    When stopped, the last heading is kept but marked as not moving."""
+    prev_lat, prev_lon = vehicle_location["lat"], vehicle_location["lon"]
+    heading, moving = vehicle_location.get("heading_deg"), False
+    if speed_kn is not None:
+        try:
+            moving = float(speed_kn) >= 2.5          # about 3 mph
+        except (TypeError, ValueError):
+            speed_kn = None
+    if speed_kn is not None and moving and course is not None:
+        try:
+            heading = float(course) % 360
+        except (TypeError, ValueError):
+            pass
+    elif speed_kn is None and prev_lat is not None:
+        if _miles(prev_lat, prev_lon, lat, lon) >= 0.03:   # about 50 m
+            heading, moving = bearing_deg(prev_lat, prev_lon, lat, lon), True
+    vehicle_location.update(lat=lat, lon=lon, updated=updated,
+                            heading_deg=heading, moving=moving)
+
+
+_load_places()
 
 
 @app.route("/")
@@ -122,7 +223,8 @@ def location_update():
             raise ValueError("Invalid coordinates")
     except (KeyError, TypeError, ValueError):
         return jsonify({"error": "Invalid coordinates"}), 400
-    vehicle_location.update(lat=lat, lon=lon, updated=datetime.now(timezone.utc).isoformat())
+    set_vehicle_position(lat, lon, datetime.now(timezone.utc).isoformat(),
+                         data.get("course"), data.get("speed_kn"))
     return jsonify({"ok": True, **public_gps()})
 
 
@@ -188,7 +290,8 @@ def team_ingest():
 
     # Feed the overlay too, but only from the streaming vehicle
     if source == os.environ.get("OVERLAY_SOURCE", "team-van-1"):
-        vehicle_location.update(lat=lat, lon=lon, updated=fix_time.isoformat())
+        set_vehicle_position(lat, lon, fix_time.isoformat(),
+                             data.get("course"), data.get("speed_kn"))
 
     return jsonify({"ok": True})
 
